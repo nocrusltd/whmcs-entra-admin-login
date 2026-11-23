@@ -1,0 +1,26 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    container: php:${{ matrix.php }}-cli
+    strategy:
+      fail-fast: false
+      matrix:
+        # 7.4 to 8.1 cover WHMCS 8.x; 8.1 to 8.3 cover WHMCS 9.x.
+        php: ['7.4', '8.0', '8.1', '8.2', '8.3']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Lint
+        run: find modules tests -name '*.php' -print0 | xargs -0 -n1 php -l
+      - name: Test
+        run: php tests/run.php
