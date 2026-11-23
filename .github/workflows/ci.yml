@@ -12,25 +12,24 @@ jobs:
   test:
     name: PHP ${{ matrix.php }}
     runs-on: ubuntu-latest
-    container: php:${{ matrix.php }}-cli
     strategy:
       fail-fast: false
       matrix:
         # 7.4 to 8.1 cover WHMCS 8.x; 8.1 to 8.3 cover WHMCS 9.x.
         php: ['7.4', '8.0', '8.1', '8.2', '8.3']
-    defaults:
-      run:
-        shell: bash
     steps:
-      # Without git, actions/checkout downloads the GitHub archive, which honours
-      # .gitattributes export-ignore and so leaves out tests/.
-      - name: Install git
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends git ca-certificates >/dev/null
+      # Check out on the runner, not inside the PHP image: the older images have
+      # no git, and checkout's archive fallback honours export-ignore and drops tests/.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Lint
+        with:
+          persist-credentials: false
+      - name: Lint and test
+        env:
+          PHP_IMAGE: php:${{ matrix.php }}-cli
         run: |
-          set -euo pipefail
-          test -f tests/run.php
-          find modules tests -name '*.php' -print0 | xargs -0 -n1 php -l
-      - name: Test
-        run: php tests/run.php
+          docker run --rm -v "$PWD":/app -w /app "$PHP_IMAGE" bash -c '
+            set -euo pipefail
+            test -f tests/run.php
+            find modules tests -name "*.php" -print0 | xargs -0 -n1 php -l
+            php tests/run.php
+          '
