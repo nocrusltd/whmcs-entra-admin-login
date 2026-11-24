@@ -90,7 +90,7 @@ final class OidcClient
         if ($status !== 200 || isset($json['error'])) {
             $error = is_string($json['error'] ?? null) ? $json['error'] : 'HTTP ' . $status;
             // Entra error descriptions start with an AADSTS code on the first line; the rest is trace noise.
-            $description = is_string($json['error_description'] ?? null) ? strtok($json['error_description'], "\r\n") : '';
+            $description = is_string($json['error_description'] ?? null) ? (string) strtok($json['error_description'], "\r\n") : '';
             throw new \RuntimeException('Token endpoint refused the code: ' . $error . ($description !== '' ? ' (' . $description . ')' : ''));
         }
         if (!is_string($json['id_token'] ?? null)) {

@@ -48,9 +48,14 @@ final class Links
     }
 
     /**
-     * Links an Entra account to an admin, replacing any earlier link for that admin.
+     * Links an Entra account to an admin. Linking the same account again is a no-op.
      *
-     * @throws \RuntimeException When the account is already linked to a different admin.
+     * An existing link is never replaced: the admin must unlink first. Otherwise
+     * anyone holding an admin's WHMCS session could silently swap the admin's
+     * link for their own Microsoft account.
+     *
+     * @throws \RuntimeException When the account is linked to another admin, or the
+     *                           admin is linked to another account.
      */
     public static function link($adminId, $tenantId, $objectId, $username, $displayName)
     {
@@ -62,7 +67,12 @@ final class Links
             if ($existing && (int) $existing->admin_id !== (int) $adminId) {
                 throw new \RuntimeException('That Microsoft account is already linked to another WHMCS admin.');
             }
-            Capsule::table(self::TABLE)->where('admin_id', (int) $adminId)->delete();
+            if ($existing) {
+                return;
+            }
+            if (Capsule::table(self::TABLE)->where('admin_id', (int) $adminId)->exists()) {
+                throw new \RuntimeException('This WHMCS admin is already linked to a different Microsoft account. Unlink it first.');
+            }
             Capsule::table(self::TABLE)->insert([
                 'admin_id' => (int) $adminId,
                 'tenant_id' => $tenantId,

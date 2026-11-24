@@ -74,9 +74,15 @@ An admin must link their Microsoft account before they can sign in with it:
 2. Open **Addons > Entra ID Admin Login** and click **Link my Microsoft account**.
 3. Enter your Microsoft credentials when asked. Linking always asks for them, even if you are already signed in to Microsoft in that browser.
 
-Each Microsoft account can be linked to one WHMCS admin, and each admin to one Microsoft account. The addon page lists every link and lets admins remove them. Disabled WHMCS admins cannot sign in, linked or not.
+Each Microsoft account can be linked to one WHMCS admin, and each admin to one Microsoft account. An existing link is never replaced: to link a different account, unlink first. The addon page lists every link; each admin can remove only their own. Disabled WHMCS admins cannot sign in, linked or not.
+
+Linking and sign-in must happen on the host in the WHMCS System URL (for example not `www.` when the System URL has no `www.`), because the sign-in state lives in the PHP session for that host. The addon page warns when you are on a different host.
 
 There is deliberately no automatic linking by email address: an attacker who could set an email address on either side would otherwise get an admin session.
+
+**What linking trusts.** Starting a link needs a signed-in WHMCS admin session plus a fresh sign-in to a Microsoft account that is assigned to the app. So someone who steals an *unlinked* admin's WHMCS session, and also controls an assigned Microsoft account (passing whatever MFA Entra requires), could link that account to the admin. WHMCS offers modules no documented way to re-check an admin's password, so the addon does not try. Keep the app's assignment list to the people who should be WHMCS admins, and check the link list after any suspected session theft.
+
+**Offboarding.** Disable the person's WHMCS admin account, or remove them from the Entra app assignment. Either stops Microsoft sign-in immediately. Their link row can stay: a link whose WHMCS admin is disabled or deleted cannot sign in. The admin can remove it from the addon page, or you can delete the row from `mod_entra_admin_login_links`.
 
 ## Sign in
 

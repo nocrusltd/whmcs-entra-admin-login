@@ -10,6 +10,7 @@
 use Nocrus\EntraAdminLogin\AdminSession;
 use Nocrus\EntraAdminLogin\IdTokenValidator;
 use Nocrus\EntraAdminLogin\Links;
+use Nocrus\EntraAdminLogin\LogText;
 use Nocrus\EntraAdminLogin\OidcClient;
 use Nocrus\EntraAdminLogin\Roles;
 use Nocrus\EntraAdminLogin\Settings;
@@ -117,22 +118,25 @@ if (!isset($_GET['code']) && !isset($_GET['error'])) {
 
 // ---- Callback from Entra ---------------------------------------------------
 
-// One use only: whatever happens next, this flow cannot be replayed.
+// A request whose state does not match is rejected without touching the stored
+// flow, so a forged callback (say, an <img> on another site) cannot cancel a
+// sign-in that is in progress. A matching state consumes the flow: one use only.
 $flow = $_SESSION[ENTRA_FLOW_KEY] ?? null;
-unset($_SESSION[ENTRA_FLOW_KEY]);
-
-if (!is_array($flow) || !is_string($_GET['state'] ?? null) || !hash_equals($flow['state'], $_GET['state'])) {
+if (!is_array($flow) || !is_string($flow['state'] ?? null)
+    || !is_string($_GET['state'] ?? null) || !hash_equals($flow['state'], $_GET['state'])) {
     entra_fail('This sign-in link is invalid or was already used. Please start again.', 'state missing or mismatched');
 }
+unset($_SESSION[ENTRA_FLOW_KEY]);
 if (time() - (int) $flow['started'] > ENTRA_FLOW_TTL) {
     entra_fail('The sign-in took too long. Please start again.', 'flow older than ' . ENTRA_FLOW_TTL . ' seconds');
 }
 if (isset($_GET['error'])) {
     $error = preg_replace('/[^a-z_]/', '', strtolower((string) $_GET['error']));
-    $description = strtok((string) ($_GET['error_description'] ?? ''), "\r\n");
+    // Entra descriptions start with an AADSTS code; keep just that, it is enough to look up.
+    preg_match('/AADSTS\d+/', (string) ($_GET['error_description'] ?? ''), $code);
     entra_fail(
         'Microsoft did not complete the sign-in (' . $error . ').',
-        'Entra returned ' . $error . ': ' . substr(preg_replace('/[^\x20-\x7e]/', '', (string) $description), 0, 300)
+        'Entra returned ' . $error . ($code ? ' ' . $code[0] : '')
     );
 }
 if (!is_string($_GET['code'] ?? null) || $_GET['code'] === '') {
@@ -144,13 +148,14 @@ try {
     $validator = new IdTokenValidator($tenantId, $settings->clientId());
     $claims = $validator->validate($idToken, $client->signingKeys(), $flow['nonce']);
 } catch (\Exception $e) {
-    entra_fail('Your Microsoft sign-in could not be verified.', $e->getMessage());
+    entra_fail('Your Microsoft sign-in could not be verified.', LogText::clean($e->getMessage()));
 }
 
 $objectId = strtolower($claims['oid']);
 $username = is_string($claims['preferred_username'] ?? null) ? $claims['preferred_username'] : '';
 $displayName = is_string($claims['name'] ?? null) ? $claims['name'] : '';
-$who = ($username !== '' ? $username : 'unknown user') . ' (oid ' . $objectId . ')';
+// Only sanitised token text goes into log lines.
+$who = ($username !== '' ? LogText::clean($username) : 'unknown user') . ' (oid ' . LogText::clean($objectId) . ')';
 
 if (!Roles::satisfied($claims, $settings->requiredRoles())) {
     entra_fail('Your Microsoft account does not have a role that allows WHMCS admin sign-in.', 'missing required app role: ' . $who);
@@ -164,7 +169,12 @@ if ($flow['mode'] === 'link') {
     try {
         Links::link($adminId, $tenantId, $objectId, $username, $displayName);
     } catch (\RuntimeException $e) {
-        entra_fail($e->getMessage(), $e->getMessage() . ' ' . $who . ' -> admin ID ' . $adminId);
+        // Links::link's own messages are fixed strings; anything else (a database error) is not shown.
+        $known = strpos($e->getMessage(), 'already linked') !== false;
+        entra_fail(
+            $known ? $e->getMessage() : 'The account could not be linked.',
+            ($known ? $e->getMessage() : 'link failed: ' . get_class($e)) . ' ' . $who . ' -> admin ID ' . $adminId
+        );
     }
     logActivity('Entra ID Admin Login: ' . $who . ' linked to admin ID ' . $adminId);
     entra_redirect(entra_admin_login_admin_url() . 'addonmodules.php?module=' . Settings::MODULE . '&linked=1');
@@ -186,7 +196,7 @@ if (!empty($admin->disabled)) {
 try {
     AdminSession::start((int) $admin->id);
 } catch (\Exception $e) {
-    entra_fail('WHMCS could not start your session. Sign in with your password instead.', $e->getMessage());
+    entra_fail('WHMCS could not start your session. Sign in with your password instead.', LogText::clean($e->getMessage()));
 }
 
 Links::recordLogin($link->id, $username, $displayName);

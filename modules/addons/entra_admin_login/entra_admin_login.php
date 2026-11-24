@@ -89,8 +89,10 @@ function entra_admin_login_output($vars)
     $notice = '';
     if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ($_POST['entra_action'] ?? '') === 'unlink') {
         check_token('WHMCS.admin.default');
-        $adminId = (int) ($_POST['admin_id'] ?? 0);
-        if (Links::unlink($adminId)) {
+        // Admins can only remove their own link. To cut someone else off, disable
+        // their WHMCS admin account or remove them from the Entra app assignment.
+        $adminId = (int) ($_SESSION['adminid'] ?? 0);
+        if ($adminId > 0 && Links::unlink($adminId)) {
             logActivity('Entra ID Admin Login: Microsoft account unlinked from admin ID ' . $adminId);
             $notice = '<div class="alert alert-success">Microsoft account unlinked.</div>';
         }
@@ -101,6 +103,16 @@ function entra_admin_login_output($vars)
 
     $loginUrl = entra_admin_login_url();
     echo $notice;
+
+    // The sign-in flow lives in the PHP session, whose cookie belongs to the host
+    // the admin is using. Linking and sign-in only work on the System URL's host.
+    $systemHost = strtolower((string) parse_url($loginUrl, PHP_URL_HOST));
+    $currentHost = strtolower((string) preg_replace('/:\d+$/', '', (string) ($_SERVER['HTTP_HOST'] ?? '')));
+    if ($systemHost !== '' && $currentHost !== '' && $systemHost !== $currentHost) {
+        echo '<div class="alert alert-warning">You are using <strong>' . $e($currentHost) . '</strong> but the WHMCS System URL is on <strong>'
+            . $e($systemHost) . '</strong>. Linking and Microsoft sign-in only work on <strong>' . $e($systemHost)
+            . '</strong>; open the admin area there first.</div>';
+    }
 
     if (!$settings->isConfigured()) {
         echo '<div class="alert alert-warning">Enter a valid tenant ID and client ID under '
@@ -142,12 +154,15 @@ function entra_admin_login_output($vars)
         echo '<td>' . $e($row->entra_name) . '<br><small>' . $e($row->entra_username) . '</small></td>'
             . '<td>' . $e($row->linked_at) . '</td>'
             . '<td>' . $e($row->last_login_at ?: 'Never') . '</td>'
-            . '<td><form method="post" action="' . $e($vars['modulelink']) . '">'
-            . generate_token('form')
-            . '<input type="hidden" name="entra_action" value="unlink">'
-            . '<input type="hidden" name="admin_id" value="' . (int) $row->id . '">'
-            . '<button type="submit" class="btn btn-xs btn-danger">Unlink</button>'
-            . '</form></td></tr>';
+            . '<td>';
+        if ((int) $row->id === $currentAdmin) {
+            echo '<form method="post" action="' . $e($vars['modulelink']) . '">'
+                . generate_token('form')
+                . '<input type="hidden" name="entra_action" value="unlink">'
+                . '<button type="submit" class="btn btn-xs btn-danger">Unlink</button>'
+                . '</form>';
+        }
+        echo '</td></tr>';
     }
 
     echo '</tbody></table>';

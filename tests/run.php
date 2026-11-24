@@ -17,6 +17,7 @@ use Nocrus\EntraAdminLogin\Base64Url;
 use Nocrus\EntraAdminLogin\Guid;
 use Nocrus\EntraAdminLogin\IdTokenValidator;
 use Nocrus\EntraAdminLogin\Jwks;
+use Nocrus\EntraAdminLogin\LogText;
 use Nocrus\EntraAdminLogin\OidcClient;
 use Nocrus\EntraAdminLogin\Roles;
 use Nocrus\EntraAdminLogin\Settings;
@@ -205,6 +206,20 @@ test('code redemption surfaces the first line of an Entra error', function () {
     throws('invalid_grant (AADSTS54005: code already redeemed.)', function () use ($client) { $client->redeemCode('c', 'v'); });
 });
 
+test('code redemption with an empty or blank error description adds no empty brackets', function () {
+    foreach (['', "\r\n"] as $description) {
+        $client = new OidcClient(TENANT, CLIENT, 'https://x.test/cb', function () use ($description) {
+            return [400, json_encode(['error' => 'invalid_grant', 'error_description' => $description])];
+        });
+        try {
+            $client->redeemCode('c', 'v');
+            throw new LogicException('expected an exception');
+        } catch (RuntimeException $e) {
+            same('Token endpoint refused the code: invalid_grant', $e->getMessage());
+        }
+    }
+});
+
 test('code redemption rejects a response without an ID token or non-JSON', function () {
     $noToken = new OidcClient(TENANT, CLIENT, 'https://x.test/cb', function () { return [200, '{"access_token":"a"}']; });
     throws('no ID token', function () use ($noToken) { $noToken->redeemCode('c', 'v'); });
@@ -356,6 +371,16 @@ test('settings parse and reject malformed GUIDs', function () {
     check(!$bad->isConfigured(), '"common" must not be accepted as a tenant');
     same([], $bad->requiredRoles());
     check(!$bad->alwaysPromptForAccount());
+});
+
+test('log text keeps identifiers and drops markup and control characters', function () {
+    same('admin@example.test (oid ' . OID . ')', LogText::clean('admin@example.test (oid ' . OID . ')'));
+    same('Token endpoint refused the code: invalid_grant (AADSTS54005: code already redeemed.)',
+        LogText::clean('Token endpoint refused the code: invalid_grant (AADSTS54005: code already redeemed.)'));
+    same('scriptalert(1)/script@x.test', LogText::clean('<script>alert(1)</script>@x.test'));
+    same('ab', LogText::clean("a\"'&<>\n\r\x00b"));
+    same('', LogText::clean(null));
+    same(200, strlen(LogText::clean(str_repeat('a', 500))));
 });
 
 // ---- Run ----------------------------------------------------------------------
