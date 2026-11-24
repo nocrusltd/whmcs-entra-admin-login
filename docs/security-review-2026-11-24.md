@@ -7,7 +7,7 @@
 | **Authorization** | The owner of the application commissioned this review and confirmed written permission to test the production deployment |
 | **Test type** | White-box source review (full read of all addon code) plus grey-box external penetration testing over HTTPS, in two rounds (see §2.2) |
 | **Overall result** | **No exploitable vulnerabilities found in the addon.** All findings are deployment hardening items and low-severity observations |
-| **Findings** | 2 Medium, 2 Low, 4 Informational — resolved as: 5 fixed (verified live), 1 withdrawn on correction, 1 accepted risk, 1 still unverified. See §3 and §8 |
+| **Findings** | 2 Medium, 2 Low, 4 Informational — resolved as: 6 fixed (5 re-verified live, 1 owner-verified), 1 withdrawn on correction, 1 accepted risk. Nothing remains open. See §3 and §8 |
 
 > **Redaction note.** This report is published in an open-source repository. Hostnames, URLs, tenant and client identifiers, certificate details, and other deployment specifics are deliberately omitted. Where a finding only applies to the owner's server configuration rather than to the addon, the affected component is described generically.
 
@@ -65,7 +65,7 @@ After the first pass, the owner authorised broadening the attack surface and per
 | SEC-005 | No rate limiting observed on admin login | Medium | Deployment | **Withdrawn** — overstated; see the erratum in §4.5 |
 | SEC-006 | Admin username not passed through the log sanitiser | Informational | Addon | **Fixed & verified** — merged and deployed during the engagement |
 | SEC-007 | PHP session IDs accepted from clients | Low | Deployment | **Fixed & verified** — `session.use_strict_mode` on |
-| SEC-008 | `redirect` parameter reflected into the login form | Informational | WHMCS core | **Open** — escaped at render; post-login handling still unverified |
+| SEC-008 | `redirect` parameter reflected into the login form | Informational | WHMCS core | **Resolved** — owner-verified manually, same day |
 
 ## 4. Detailed findings
 
@@ -176,13 +176,15 @@ After the first pass, the owner authorised broadening the attack surface and per
 
 ### SEC-008 — `redirect` parameter reflected into the login form
 
-**Severity:** Informational · **Component:** WHMCS core · **Status:** Open (unverified)
+**Severity:** Informational · **Component:** WHMCS core · **Status:** Resolved (owner-verified)
 
 **Description.** The WHMCS admin login page echoes its `redirect` query parameter into a hidden form field on the rendered page, and it accepts absolute URLs in that parameter (`https://…` and protocol-relative `//…` were both accepted at render time). Output escaping **is** applied — a single quote in the value was rendered as `&#039;`, and no quote breakout was possible, so there is no reflected XSS here (and the WAF independently blocked every markup payload attempted). What could not be verified without credentials is whether the value is validated *after* a successful login, when the handler acts on it.
 
 **Impact.** None demonstrated. If the post-login handler does not validate the target, a phished link of the form `login.php?redirect=//attacker/…` would bounce a freshly authenticated admin to an attacker site — a credential-harvesting tail for a social-engineering attack. Modern WHMCS validates this parameter on use, but that could not be confirmed on this deployment.
 
 **Remediation.** The owner should log in once via a link with a benign absolute `redirect` value and observe where the browser lands; if it leaves the WHMCS origin, report it to WHMCS support (it is core behaviour, not addon code).
+
+> **Resolution.** The owner performed this manual check the same day and confirmed the post-login redirect does not leave the WHMCS origin; the handler validates the parameter before acting on it. No open redirect, no WHMCS report needed. Closed.
 
 ## 5. Controls verified (source review and live testing)
 
@@ -230,7 +232,7 @@ All of the following behaved correctly under live adversarial requests. Each row
 3. **SEC-002 (admin-area headers)** — **done and verified**, with the no-full-CSP trade-off noted in the finding.
 4. **SEC-007 (`use_strict_mode`)** — **done and verified**.
 5. **SEC-003 (SameSite=Lax)** — **done and verified**.
-6. **SEC-008** — **still open**: one manual verification by the owner (log in via a crafted `redirect` link, observe the landing point; report to WHMCS if it leaves the origin).
+6. **SEC-008** — **done**: the owner manually verified the post-login redirect stays on the WHMCS origin.
 7. **SEC-006** — done, merged and verified deployed during the engagement.
 8. **SEC-004** — **accepted risk**, deliberately not done.
 
@@ -265,4 +267,4 @@ Every fix claimed by the owner was re-tested against the deployment before this 
 - **IP bans cover Microsoft sign-in.** WHMCS checks its ban table on every page, and the sign-in endpoint boots the WHMCS initializer, so a banned address cannot use either sign-in method. Recoverable under *Configuration → Other → Banned IPs*. Details in the SEC-005 erratum.
 - **Out of scope, noted for the owner:** an unrelated third-party application on the same account returns HTTP 500 when unauthenticated (a known bug in that product's own code, recurring since 3 June, unhandled here). Its login page itself works. It is not WHMCS, not the addon, and was not touched.
 
-Findings that remain open after this engagement: **SEC-008** (one manual check by the owner) and, as an accepted risk, **SEC-004**.
+Findings that remain open after this engagement: **none.** Every item is fixed (most re-verified live), withdrawn with an erratum, or — in the case of the default admin folder name (SEC-004) — explicitly accepted as a risk by the owner.
