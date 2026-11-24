@@ -10,6 +10,7 @@ WHMCS has no built-in way to do this. Its own "OpenID Connect" feature runs the 
 - Admins are matched on their immutable Entra object ID. Email addresses and UPNs are never used to decide who someone is.
 - Optional app-role requirement.
 - Every sign-in, link and failure is written to the WHMCS activity log.
+- The sign-in endpoint sends its own strict security headers (`Content-Security-Policy: default-src 'none'`, `X-Frame-Options: DENY`, `nosniff`), whatever your server configuration.
 - No dependencies: install it by copying one folder.
 
 Requires WHMCS 8 or 9 and PHP 7.4 or later with the `curl` and `openssl` extensions.
@@ -111,6 +112,8 @@ docker run --rm -v "$PWD":/app -w /app php:8.3-cli php tests/run.php
 CI runs them on PHP 7.4 to 8.4. The tests cover the token validator, key handling and OIDC client. The parts that talk to WHMCS (`login.php`, the addon page and `AdminSession`) can only be tested against a real WHMCS installation.
 
 ## Security
+
+The addon has had a full white-box code review and a grey-box penetration test of a production deployment (two rounds, November 2026). No exploitable vulnerabilities were found in it. The report, including what was tested and how the deployment findings were resolved, is in [`docs/security-review-2026-11-24.md`](docs/security-review-2026-11-24.md).
 
 Please report vulnerabilities privately via GitHub's "Report a vulnerability" on this repository rather than in a public issue.
 
