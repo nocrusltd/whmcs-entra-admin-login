@@ -12,4 +12,5 @@ require_once __DIR__ . '/Settings.php';
 require_once __DIR__ . '/Links.php';
 require_once __DIR__ . '/Roles.php';
 require_once __DIR__ . '/LogText.php';
+require_once __DIR__ . '/LoginPageButton.php';
 require_once __DIR__ . '/AdminSession.php';
