@@ -17,6 +17,7 @@ use Nocrus\EntraAdminLogin\Base64Url;
 use Nocrus\EntraAdminLogin\Guid;
 use Nocrus\EntraAdminLogin\IdTokenValidator;
 use Nocrus\EntraAdminLogin\Jwks;
+use Nocrus\EntraAdminLogin\LoginPageButton;
 use Nocrus\EntraAdminLogin\LogText;
 use Nocrus\EntraAdminLogin\OidcClient;
 use Nocrus\EntraAdminLogin\Roles;
@@ -381,6 +382,62 @@ test('log text keeps identifiers and drops markup and control characters', funct
     same('ab', LogText::clean("a\"'&<>\n\r\x00b"));
     same('', LogText::clean(null));
     same(200, strlen(LogText::clean(str_repeat('a', 500))));
+});
+
+// ---- LoginPageButton ------------------------------------------------------------
+
+// A minimal stand-in with the same shape as the WHMCS admin login template.
+function loginTemplate(string $nl = "\n"): string
+{
+    return implode($nl, [
+        '<div class="login-body">',
+        '    {if $errorMsg}<div class="alert">{$errorMsg}</div>{/if}',
+        '    {if $step eq "login"}',
+        '        <form method="post" action="dologin.php">',
+        '            <input type="text" name="username" />',
+        '            <input type="submit" class="btn btn-primary btn-block" />',
+        '        </form>',
+        '    {elseif $step eq "reset"}',
+        '        <form method="post" action="pwreset.php"></form>',
+        '    {/if}',
+        '</div>',
+        '',
+    ]);
+}
+
+test('login button goes inside the login step, directly above the password form', function () {
+    $out = LoginPageButton::apply(loginTemplate());
+    check(LoginPageButton::isApplied($out));
+    $step = strpos($out, '{if $step eq "login"}');
+    $start = strpos($out, LoginPageButton::START);
+    $button = strpos($out, 'href="../modules/addons/entra_admin_login/login.php"');
+    $end = strpos($out, LoginPageButton::END);
+    $form = strpos($out, '<form method="post" action="dologin.php">');
+    check($step < $start && $start < $button && $button < $end && $end < $form, 'block is not between the login step and the form');
+    check(strpos($out, '        ' . LoginPageButton::START . "\n") !== false, 'block does not match the form indentation');
+    same(1, substr_count($out, 'Sign in with Microsoft'));
+    same(1, substr_count($out, '<form method="post" action="pwreset.php">'), 'other steps must be untouched');
+});
+
+test('applying twice changes nothing and removing restores the original exactly', function () {
+    $original = loginTemplate();
+    $once = LoginPageButton::apply($original);
+    same($once, LoginPageButton::apply($once));
+    same($original, LoginPageButton::remove($once));
+    same($original, LoginPageButton::remove($original));
+});
+
+test('windows line endings are kept', function () {
+    $original = loginTemplate("\r\n");
+    $out = LoginPageButton::apply($original);
+    check(strpos(str_replace("\r\n", '', $out), "\n") === false, 'a bare LF was introduced');
+    same($original, LoginPageButton::remove($out));
+});
+
+test('the template is refused when the login form is missing or ambiguous', function () {
+    throws('expected login form', function () { LoginPageButton::apply(str_replace('action="dologin.php"', 'action="other.php"', loginTemplate())); });
+    throws('expected login form', function () { LoginPageButton::apply(str_replace('{if $step eq "login"}', '{if $step == "login"}', loginTemplate())); });
+    throws('expected login form', function () { LoginPageButton::apply(loginTemplate() . loginTemplate()); });
 });
 
 // ---- Run ----------------------------------------------------------------------

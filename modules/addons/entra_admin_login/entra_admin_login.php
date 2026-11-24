@@ -4,6 +4,7 @@
 // Entra ID Admin Login: sign in to the WHMCS admin area with a Microsoft Entra ID account.
 
 use Nocrus\EntraAdminLogin\Links;
+use Nocrus\EntraAdminLogin\LoginPageButton;
 use Nocrus\EntraAdminLogin\Settings;
 
 if (!defined('WHMCS')) {
@@ -60,9 +61,16 @@ function entra_admin_login_activate()
         return ['status' => 'error', 'description' => 'Could not create the link table: ' . $e->getMessage()];
     }
 
+    try {
+        entra_admin_login_set_button(true);
+        $button = ' The "Sign in with Microsoft" button was added to the admin login page.';
+    } catch (\Exception $e) {
+        $button = ' The login page button was not added: ' . $e->getMessage();
+    }
+
     return [
         'status' => 'success',
-        'description' => 'Activated. Enter the tenant and client IDs, then link admin accounts from Addons > Entra ID Admin Login.',
+        'description' => 'Activated. Enter the tenant and client IDs, then link admin accounts from Addons > Entra ID Admin Login.' . $button,
     ];
 }
 
@@ -70,7 +78,13 @@ function entra_admin_login_deactivate()
 {
     // The link table is kept, so deactivating and reactivating does not make
     // every admin link again. Drop mod_entra_admin_login_links by hand to remove it.
-    return ['status' => 'success', 'description' => 'Deactivated. Account links were kept.'];
+    try {
+        entra_admin_login_set_button(false);
+        $button = ' The login page button was removed.';
+    } catch (\Exception $e) {
+        $button = ' The login page button could not be removed: ' . $e->getMessage();
+    }
+    return ['status' => 'success', 'description' => 'Deactivated. Account links were kept.' . $button];
 }
 
 /**
@@ -95,6 +109,17 @@ function entra_admin_login_output($vars)
         if ($adminId > 0 && Links::unlink($adminId)) {
             logActivity('Entra ID Admin Login: Microsoft account unlinked from admin ID ' . $adminId);
             $notice = '<div class="alert alert-success">Microsoft account unlinked.</div>';
+        }
+    }
+    if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && in_array($_POST['entra_action'] ?? '', ['button_on', 'button_off'], true)) {
+        check_token('WHMCS.admin.default');
+        $on = $_POST['entra_action'] === 'button_on';
+        try {
+            entra_admin_login_set_button($on);
+            logActivity('Entra ID Admin Login: login page button ' . ($on ? 'added' : 'removed'));
+            $notice = '<div class="alert alert-success">Login page button ' . ($on ? 'added' : 'removed') . '.</div>';
+        } catch (\Exception $ex) {
+            $notice = '<div class="alert alert-danger">' . $e($ex->getMessage()) . '</div>';
         }
     }
     if (isset($_GET['linked'])) {
@@ -124,6 +149,28 @@ function entra_admin_login_output($vars)
         . 'It is also the address admins use to sign in with Microsoft.</p>'
         . '<p><code>' . $e($loginUrl) . '</code></p>'
         . '</div></div>';
+
+    // Login page button status.
+    try {
+        $buttonOn = LoginPageButton::isApplied((string) file_get_contents(entra_admin_login_login_template()));
+        $buttonState = $buttonOn
+            ? '<span class="label label-success">On the login page</span>'
+            : '<span class="label label-warning">Not on the login page</span> A WHMCS update replaces the login template and removes the button; add it again here.';
+    } catch (\Exception $ex) {
+        $buttonOn = null;
+        $buttonState = '<span class="label label-danger">Login template not readable</span>';
+    }
+    echo '<div class="panel panel-default"><div class="panel-heading"><strong>Admin login page button</strong></div><div class="panel-body">'
+        . '<p>Shows "Sign in with Microsoft" above the username and password form, which stays available as the fallback.</p>'
+        . '<p>' . $buttonState . '</p>';
+    if ($buttonOn !== null) {
+        echo '<form method="post" action="' . $e($vars['modulelink']) . '">'
+            . generate_token('form')
+            . '<input type="hidden" name="entra_action" value="' . ($buttonOn ? 'button_off' : 'button_on') . '">'
+            . '<button type="submit" class="btn btn-sm ' . ($buttonOn ? 'btn-default">Remove button' : 'btn-primary">Add button') . '</button>'
+            . '</form>';
+    }
+    echo '</div></div>';
 
     if ($settings->isConfigured()) {
         // POST with the WHMCS CSRF token, so another site cannot start a link for a signed-in admin.
@@ -178,9 +225,55 @@ function entra_admin_login_url()
 /** @return string Absolute URL of the admin area. */
 function entra_admin_login_admin_url()
 {
-    $folder = isset($GLOBALS['customadminpath']) && is_string($GLOBALS['customadminpath']) && $GLOBALS['customadminpath'] !== ''
+    $systemUrl = rtrim((string) \WHMCS\Config\Setting::getValue('SystemURL'), '/');
+    return $systemUrl . '/' . trim(entra_admin_login_admin_folder(), '/') . '/';
+}
+
+/** @return string Path of the admin login template. */
+function entra_admin_login_login_template()
+{
+    $root = defined('ROOTDIR') ? ROOTDIR : dirname(__DIR__, 3);
+    return rtrim($root, '/') . '/' . trim(entra_admin_login_admin_folder(), '/') . '/templates/login.tpl';
+}
+
+/** @return string Name of the admin folder. */
+function entra_admin_login_admin_folder()
+{
+    return isset($GLOBALS['customadminpath']) && is_string($GLOBALS['customadminpath']) && $GLOBALS['customadminpath'] !== ''
         ? $GLOBALS['customadminpath']
         : 'admin';
-    $systemUrl = rtrim((string) \WHMCS\Config\Setting::getValue('SystemURL'), '/');
-    return $systemUrl . '/' . trim($folder, '/') . '/';
+}
+
+/**
+ * Adds or removes the login page button. Writes a temporary file next to the
+ * template and renames it over the original, so the template is never half-written.
+ *
+ * @param bool $on
+ * @throws \RuntimeException
+ */
+function entra_admin_login_set_button($on)
+{
+    $path = entra_admin_login_login_template();
+    $current = is_readable($path) ? file_get_contents($path) : false;
+    if ($current === false) {
+        throw new \RuntimeException('Cannot read ' . $path . '.');
+    }
+    $updated = $on ? LoginPageButton::apply($current) : LoginPageButton::remove($current);
+    if ($updated === $current) {
+        return;
+    }
+
+    $temp = $path . '.entra-' . bin2hex(random_bytes(6)) . '.tmp';
+    if (file_put_contents($temp, $updated) !== strlen($updated)) {
+        @unlink($temp);
+        throw new \RuntimeException('Cannot write next to ' . $path . '.');
+    }
+    $mode = @fileperms($path);
+    if ($mode !== false) {
+        @chmod($temp, $mode & 0777);
+    }
+    if (!@rename($temp, $path)) {
+        @unlink($temp);
+        throw new \RuntimeException('Cannot replace ' . $path . '.');
+    }
 }

@@ -86,15 +86,17 @@ There is deliberately no automatic linking by email address: an attacker who cou
 
 ## Sign in
 
-Open the sign-in URL (bookmark it). There is no documented hook for adding a button to the WHMCS admin login page. To add one, edit your admin login template and re-apply the change after WHMCS upgrades:
+Activating the addon adds a **Sign in with Microsoft** button to the top of the standard WHMCS admin login page. The username and password form stays underneath as the fallback, so you can still sign in with your password if Entra ID or the addon is unavailable.
 
-```html
-<a href="../modules/addons/entra_admin_login/login.php" class="btn btn-default btn-block">Sign in with Microsoft</a>
-```
+WHMCS's admin login template has no hook output, so the button is added by editing `<admin folder>/templates/login.tpl`. The edit is one block between `{* entra_admin_login:start ... *}` and `{* entra_admin_login:end *}` markers, placed directly above the password form; nothing else in the template is changed. The addon refuses to edit a template where it cannot find that form exactly once. The template is written to a temporary file first and then renamed into place.
+
+**WHMCS updates replace the login template and remove the button.** The addon page shows whether the button is present and has a button to add it again. Deactivating the addon removes the block.
+
+The sign-in URL itself (`<System URL>/modules/addons/entra_admin_login/login.php`) also works directly, for example as a bookmark.
 
 ## Removing the addon
 
-Deactivating the addon stops Microsoft sign-in immediately. Account links are kept in the `mod_entra_admin_login_links` table so that reactivating does not make every admin link again. Drop that table to remove them.
+Deactivating the addon stops Microsoft sign-in immediately and removes the login page button. Account links are kept in the `mod_entra_admin_login_links` table so that reactivating does not make every admin link again. Drop that table to remove them.
 
 ## Development
 
