@@ -7,7 +7,7 @@
 | **Authorization** | The owner of the application commissioned this review and confirmed written permission to test the production deployment |
 | **Test type** | White-box source review (full read of all addon code) plus grey-box external penetration testing over HTTPS, in two rounds (see §2.2) |
 | **Overall result** | **No exploitable vulnerabilities found in the addon.** All findings are deployment hardening items and low-severity observations |
-| **Findings** | 2 Medium, 2 Low, 4 Informational (one of the Informational items is already fixed in code; see the table) |
+| **Findings** | 2 Medium, 2 Low, 4 Informational — resolved as: 5 fixed (verified live), 1 withdrawn on correction, 1 accepted risk, 1 still unverified. See §3 and §8 |
 
 > **Redaction note.** This report is published in an open-source repository. Hostnames, URLs, tenant and client identifiers, certificate details, and other deployment specifics are deliberately omitted. Where a finding only applies to the owner's server configuration rather than to the addon, the affected component is described generically.
 
@@ -58,20 +58,20 @@ After the first pass, the owner authorised broadening the attack surface and per
 
 | ID | Title | Severity | Component | Status |
 |---|---|---|---|---|
-| SEC-001 | No HTTP Strict Transport Security (HSTS) | Medium | Deployment | Open |
-| SEC-002 | Missing security headers on the WHMCS admin area | Low | Deployment | Partially fixed — the addon's endpoint now sends its own headers (merged PR); the admin area still needs server-level headers |
-| SEC-003 | Session cookie has no SameSite attribute | Low | Deployment | Open |
-| SEC-004 | Admin area uses the WHMCS default folder name | Informational | Deployment | Open |
-| SEC-005 | No rate limiting observed on admin login | Medium | Deployment | Open |
-| SEC-006 | Admin username not passed through the log sanitiser | Informational | Addon | **Fixed** — sanitised in a merged PR on the day of testing |
-| SEC-007 | PHP session IDs accepted from clients | Low | Deployment | Open |
-| SEC-008 | `redirect` parameter reflected into the login form | Informational | WHMCS core | Open (escaped; post-login handling unverified) |
+| SEC-001 | No HTTP Strict Transport Security (HSTS) | Medium | Deployment | **Fixed & verified** — `includeSubDomains` deliberately omitted (§8.1) |
+| SEC-002 | Missing security headers on the WHMCS admin area | Low | Deployment | **Fixed & verified** — no full CSP, a documented trade-off (§8.1) |
+| SEC-003 | Session cookie has no SameSite attribute | Low | Deployment | **Fixed & verified** — `SameSite=Lax` |
+| SEC-004 | Admin area uses the WHMCS default folder name | Informational | Deployment | **Accepted risk** — deliberately not done |
+| SEC-005 | No rate limiting observed on admin login | Medium | Deployment | **Withdrawn** — overstated; see the erratum in §4.5 |
+| SEC-006 | Admin username not passed through the log sanitiser | Informational | Addon | **Fixed & verified** — merged and deployed during the engagement |
+| SEC-007 | PHP session IDs accepted from clients | Low | Deployment | **Fixed & verified** — `session.use_strict_mode` on |
+| SEC-008 | `redirect` parameter reflected into the login form | Informational | WHMCS core | **Open** — escaped at render; post-login handling still unverified |
 
 ## 4. Detailed findings
 
 ### SEC-001 — No HTTP Strict Transport Security (HSTS)
 
-**Severity:** Medium · **Component:** Deployment · **Status:** Open
+**Severity:** Medium · **Component:** Deployment · **Status:** Fixed & verified
 
 **Description.** No `Strict-Transport-Security` header is returned on any response, and it is absent from the HTTPS host's response set as a whole. Plain-HTTP requests are redirected to HTTPS with a `301`, which is correct, but the redirect only helps a client that reaches the genuine server. A network-position attacker can strip or intercept the *first* plaintext request (or a manually typed `http://` URL) before the redirect is ever seen. The admin area is the highest-value target on the deployment and is the page users type from memory.
 
@@ -81,15 +81,19 @@ After the first pass, the owner authorised broadening the attack surface and per
 
 **Remediation.** Serve `Strict-Transport-Security: max-age=31536000; includeSubDomains` on all HTTPS responses, at the web-server level. Begin with a shorter `max-age` if roll-out risk is a concern, then raise it.
 
+> **Resolution.** `max-age=31536000` is now served on every response of the deployment's hosts. `includeSubDomains` was deliberately omitted by the owner: other subdomains on the same zone cannot all be vouched for as HTTPS-only, and forcing them would break any that are not, for a year. That is a reasonable scoping decision — the finding as it applies to the tested host is closed.
+
 ---
 
 ### SEC-002 — Missing security headers on the WHMCS admin area
 
-**Severity:** Low · **Component:** Deployment · **Status:** Partially fixed
+**Severity:** Low · **Component:** Deployment · **Status:** Fixed & verified
 
 **Description.** The WHMCS admin area responses carry no `Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`, or `Permissions-Policy`. The login page can therefore be framed by any origin, and content-type sniffing is not disabled.
 
 > **Update (round two).** The addon's own endpoint now sends `X-Content-Type-Options`, `X-Frame-Options: DENY` and a restrictive CSP, and this was verified live on the deployment. The WHMCS admin area at large (rendered by WHMCS core, whose headers the addon cannot control) remains without them, so the finding stays open at the server level.
+>
+> **Resolution.** The WHMCS admin area now sends `X-Frame-Options: SAMEORIGIN`, `Content-Security-Policy: frame-ancestors 'self'`, `X-Content-Type-Options: nosniff`, a `Referrer-Policy` and a restrictive `Permissions-Policy` — all re-verified live. No full `default-src` CSP, because the WHMCS admin UI depends on inline scripts and a full policy would break it; the framing and sniffing protections were the substantive part of the finding. Closed.
 
 **Impact.** Clickjacking against a framed admin login is of limited practical value (the attacker cannot read the submitted credentials, and the OIDC callback is protected by server-side state), but it can be used for touch-redirection or forced-interaction tricks. Without `nosniff`, a mis-set `Content-Type` on any future endpoint becomes easier to abuse. These are cheap, standard hardening headers.
 
@@ -99,7 +103,7 @@ After the first pass, the owner authorised broadening the attack surface and per
 
 ### SEC-003 — Session cookie has no SameSite attribute
 
-**Severity:** Low · **Component:** Deployment · **Status:** Open
+**Severity:** Low · **Component:** Deployment · **Status:** Fixed & verified
 
 **Description.** The PHP session cookie is issued with `Secure` and `HttpOnly` (good) but no `SameSite` attribute, so behaviour depends on each browser's default. Modern browsers treat a missing attribute as `Lax`, which is adequate for this design: the OIDC callback is a top-level GET navigation (sent under `Lax`), and every state-changing POST carries a CSRF token. But `Lax` is a compatibility default, not a stated policy, and older browsers fall back to sending the cookie unrestrictedly.
 
@@ -107,11 +111,13 @@ After the first pass, the owner authorised broadening the attack surface and per
 
 **Remediate** by setting `session.cookie_samesite = Lax` in the PHP configuration (WHMCS's admin area does not need third-party embedding). Do not use `Strict` here: the OIDC callback arrives as a cross-site top-level GET navigation, and `Strict` would drop the session cookie on it and break sign-in.
 
+> **Resolution.** The session cookie now carries `SameSite=Lax` alongside `Secure` and `HttpOnly`, re-verified live. (For the record: on this hosting, PHP settings in a `.user.ini` are ignored — they had to be set via `.htaccess`. Operators of similar deployments should check which mechanism their PHP handler honours.)
+
 ---
 
 ### SEC-004 — Admin area uses the WHMCS default folder name
 
-**Severity:** Informational · **Component:** Deployment · **Status:** Open
+**Severity:** Informational · **Component:** Deployment · **Status:** Accepted risk
 
 **Description.** The admin area is served under WHMCS's default admin folder name, reachable at a predictable path. Mass scanners and opportunistic attackers enumerate these paths first. WHMCS supports a custom admin path, and the addon already handles it correctly (see `entra_admin_login_admin_folder()`, which reads `$GLOBALS['customadminpath']`, and the relative link generated by `LoginPageButton`).
 
@@ -119,17 +125,26 @@ After the first pass, the owner authorised broadening the attack surface and per
 
 **Remediation.** Optional. Rename the admin folder and set the custom admin path per WHMCS documentation; the addon requires no changes to support this.
 
+> **Resolution.** Deliberately not done — an explicit accepted-risk decision by the owner (obscurity, and the rename would break existing bookmarks). No further action; revisit if desired.
+
 ---
 
 ### SEC-005 — No rate limiting observed on admin login
 
-**Severity:** Medium · **Component:** Deployment · **Status:** Open
+**Severity:** Medium — **withdrawn** (see the erratum) · **Component:** Deployment · **Status:** Withdrawn
 
 **Description.** Round one withheld this test by design (§2). In round two, eleven consecutive genuine failed logins were submitted to the admin login handler — each with a freshly valid CSRF token (verified present, 40 characters, and confirmed to reach the credential check by the `invalid` flag in the response redirect), using a randomly generated nonexistent username so no real account was affected. All eleven attempts were processed: the same failure redirect each time, no HTTP 429 or delay, no CAPTCHA challenge, no temporary IP ban, and no lockout message. The admin area remained fully reachable immediately afterwards.
 
 **Impact.** The admin credential endpoint — the highest-value surface on the deployment — appears to accept unlimited online guessing attempts, subject only to a WAF that filters by payload *signature* rather than rate. Password strength is therefore the sole control against brute force. Since usernames are not enumerable (generic error, no timing oracle — see §5), guesses would need to cover both username and password space, which raises the cost of a real attack considerably; the rating is Medium rather than High for that reason.
 
 **Remediation.** Enable admin login failure throttling in *System Settings → Security Policy* (WHMCS ships it; it does not appear to be active here), and alert on admin login failures. A server-level rate limit on the admin login handler as a second layer would also cover token-less guessing (which is rejected by CSRF checks but not counted as a failure by WHMCS).
+
+> **Erratum — this finding was overstated.** After remediation work began, the owner found brute-force protection **was already enabled** during the test (a 15-minute ban after 3 counted failures), and the deployment additionally runs a score-based behavioural bot-detection check *before* the credential check. The activity log recorded only 1 of the 11 test attempts as a failed login; the rest were evidently stopped by that gate and never reached the counter. The test as designed could not distinguish a bot-blocked attempt from a throttled one — a blind spot in the methodology, not evidence that no throttle existed. The "Medium" severity and the "appears unthrottled" conclusion are therefore withdrawn. The owner has since raised the ban window to 60 minutes.
+>
+> Two follow-on notes for the record:
+>
+> - Confirming the ban end-to-end would require three *counted* failures from a second IP (three from the owner's own address would lock the office out for the new 60-minute window), so the ban's enforcement remains verified by configuration and log evidence rather than by direct trigger.
+> - **A WHMCS IP ban covers the addon's Microsoft sign-in too** — WHMCS checks the ban table on every page, and the sign-in endpoint boots the WHMCS initializer. After three failed password logins, both sign-in methods are unavailable from the banned address for the window (recoverable under *Configuration → Other → Banned IPs*). That coupling is correct behaviour, but it is worth knowing: the OIDC flow is not a way around an IP ban.
 
 ---
 
@@ -147,13 +162,15 @@ After the first pass, the owner authorised broadening the attack surface and per
 
 ### SEC-007 — PHP session IDs accepted from clients
 
-**Severity:** Low · **Component:** Deployment · **Status:** Open
+**Severity:** Low · **Component:** Deployment · **Status:** Fixed & verified
 
 **Description.** Round two probed session handling: a session cookie value chosen by the tester was supplied to the server, a sign-in flow was started under it, and the flow's state was stored and then accepted on callback under that same client-chosen ID. A subsequent request confirmed the server *keeps* a client-supplied ID rather than rotating it. This is PHP's default behaviour with `session.use_strict_mode` off: the session layer will instantiate a session for any ID a client presents.
 
 **Impact.** This is the classic session-fixation surface. It is **mitigated on the addon's path**: `AdminSession::start()` calls `session_regenerate_id(true)` at the privilege change, so an ID fixed before sign-in is discarded when the admin session is created. The residual risk is in anything else that trusts a pre-authenticated session ID, including WHMCS core paths outside this review's scope, and any future code that forgets to regenerate.
 
 **Remediation.** Set `session.use_strict_mode = 1` in the PHP configuration: the server then rejects unknown client-supplied session IDs and issues fresh ones, closing the fixation surface platform-wide. Test the sign-in round-trip afterwards (some applications subtly depend on lax IDs).
+
+> **Resolution.** `session.use_strict_mode` is now on, re-verified live by repeating the original round-two probe: a made-up session ID supplied by the client was discarded and replaced with a server-issued one, rather than kept. The fixation surface is closed.
 
 ---
 
@@ -206,16 +223,16 @@ All of the following behaved correctly under live adversarial requests. Each row
 | WAF present and not bypassed | server-level | **Live**: signature blocks on all four XSS bypass attempts (mixed case, nested tag, `svg onload`, quote-breakout); blocking is per-request, not a lasting IP ban |
 | Session regeneration at privilege change | `AdminSession::start` | Source review + **live** confirmation that the pre-auth session layer itself is lax (see SEC-007) |
 
-## 6. Remediation priority
+## 6. Remediation priority — final state
 
-1. **SEC-001 (HSTS)** — one header, removes the first-visit downgrade class. Do this first.
-2. **SEC-005 (admin login rate limiting)** — enable WHMCS's shipped admin login failure throttling and alert on failures; this is the only finding that leaves a credential endpoint unthrottled.
-3. **SEC-002 (security headers on the admin area)** — same effort class as SEC-001; the addon's own endpoint is already covered.
-4. **SEC-007 (`session.use_strict_mode = 1`)** — one PHP setting; test the full sign-in round-trip afterwards.
-5. **SEC-003 (SameSite=Lax)** — one PHP setting alongside SEC-007.
-6. **SEC-008** — one manual verification by the owner (log in via a crafted `redirect` link, observe the landing point).
+1. **SEC-001 (HSTS)** — **done and verified** (§8.1).
+2. **SEC-005** — **withdrawn**; brute-force protection was enabled throughout, the test could not see it (§4.5 erratum). The owner has since raised the ban window to 60 minutes.
+3. **SEC-002 (admin-area headers)** — **done and verified**, with the no-full-CSP trade-off noted in the finding.
+4. **SEC-007 (`use_strict_mode`)** — **done and verified**.
+5. **SEC-003 (SameSite=Lax)** — **done and verified**.
+6. **SEC-008** — **still open**: one manual verification by the owner (log in via a crafted `redirect` link, observe the landing point; report to WHMCS if it leaves the origin).
 7. **SEC-006** — done, merged and verified deployed during the engagement.
-8. **SEC-004** — optional, purely to reduce scanner noise.
+8. **SEC-004** — **accepted risk**, deliberately not done.
 
 ## 7. Limitations
 
@@ -225,3 +242,27 @@ All of the following behaved correctly under live adversarial requests. Each row
 - The round-two session probe demonstrated the fixation *surface* but not a completed fixation attack: finishing one would require a real sign-in and a cooperating victim.
 - Browser-level testing (UI redressing, DOM-based issues in the admin area's JavaScript) was not performed; the addon itself ships no client-side script beyond a static link.
 - A merged PR landed mid-engagement (log sanitisation + endpoint headers); findings were re-checked against the updated code and the updated deployment as noted.
+- Ban-enforcement testing after the remediation round was limited by the new 60-minute lockout window and the shared office IP: the ban's operation is verified by configuration and activity-log evidence, not by deliberately triggering it.
+
+## 8. Post-remediation verification (same day)
+
+Every fix claimed by the owner was re-tested against the deployment before this report was finalised. No credential attempts were made in this pass — the ban window had by then been raised to 60 minutes, and the testing machine is the office IP.
+
+| Fix | How re-verified | Result |
+|---|---|---|
+| HSTS (SEC-001) | Header inspection on the main site, the admin area, and the sign-in endpoint | `strict-transport-security: max-age=31536000` on all. `includeSubDomains` omitted as a scoping decision (see §4.1) |
+| Admin-area headers (SEC-002) | Header inspection on the admin login page | `X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'`, `nosniff`, `Referrer-Policy`, `Permissions-Policy` all present |
+| Endpoint headers (SEC-002) | Header inspection on the sign-in endpoint | PR #4's stricter set (`DENY`, `default-src 'none'`) unchanged and still deployed |
+| SameSite (SEC-003) | Fresh session cookie inspection | `SameSite=Lax` alongside `Secure` and `HttpOnly` |
+| Strict mode (SEC-007) | Repeat of the round-two fixation probe: a made-up session ID was supplied by the client | The server discarded it and issued a fresh ID — the fixation surface is closed |
+| Log sanitisation (SEC-006) | Deployed source matches the merged fix | Fixed |
+
+### 8.1 Notes carried out of the remediation round
+
+- **HSTS scoping.** `includeSubDomains` was omitted deliberately: the zone has other subdomains that cannot all be vouched for as HTTPS-only, and a forced upgrade would break any that are not, for the lifetime of the `max-age`. Reasonable decision; the tested host is covered.
+- **No full CSP on the admin area.** The WHMCS admin UI depends on inline scripts; a `default-src` policy would break it. Framing and sniffing protections — the substantive part of the finding — are in place.
+- **`.user.ini` is ignored by this PHP handler.** PHP settings must be set via `.htaccess` on this deployment (bit hard-earned during the SameSite fix). Other settings could have silently "applied" the same way.
+- **IP bans cover Microsoft sign-in.** WHMCS checks its ban table on every page, and the sign-in endpoint boots the WHMCS initializer, so a banned address cannot use either sign-in method. Recoverable under *Configuration → Other → Banned IPs*. Details in the SEC-005 erratum.
+- **Out of scope, noted for the owner:** an unrelated third-party application on the same account returns HTTP 500 when unauthenticated (a known bug in that product's own code, recurring since 3 June, unhandled here). Its login page itself works. It is not WHMCS, not the addon, and was not touched.
+
+Findings that remain open after this engagement: **SEC-008** (one manual check by the owner) and, as an accepted risk, **SEC-004**.
