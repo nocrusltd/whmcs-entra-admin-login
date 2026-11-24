@@ -100,7 +100,7 @@ php tests/run.php
 docker run --rm -v "$PWD":/app -w /app php:8.3-cli php tests/run.php
 ```
 
-CI runs them on PHP 7.4 to 8.3. The tests cover the token validator, key handling and OIDC client. The parts that talk to WHMCS (`login.php`, the addon page and `AdminSession`) can only be tested against a real WHMCS installation.
+CI runs them on PHP 7.4 to 8.4. The tests cover the token validator, key handling and OIDC client. The parts that talk to WHMCS (`login.php`, the addon page and `AdminSession`) can only be tested against a real WHMCS installation.
 
 ## Security
 

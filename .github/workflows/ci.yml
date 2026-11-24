@@ -15,8 +15,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 7.4 to 8.1 cover WHMCS 8.x; 8.1 to 8.3 cover WHMCS 9.x.
-        php: ['7.4', '8.0', '8.1', '8.2', '8.3']
+        # 7.4 to 8.1 cover WHMCS 8.x; 8.1 to 8.4 cover WHMCS 9.x.
+        php: ['7.4', '8.0', '8.1', '8.2', '8.3', '8.4']
     steps:
       # Check out on the runner, not inside the PHP image: the older images have
       # no git, and checkout's archive fallback honours export-ignore and drops tests/.
