@@ -1,0 +1,5 @@
+# Keep release archives to what WHMCS needs.
+/tests export-ignore
+/.github export-ignore
+/.gitattributes export-ignore
+/.gitignore export-ignore
