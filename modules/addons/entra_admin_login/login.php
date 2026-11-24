@@ -25,6 +25,11 @@ const ENTRA_FLOW_TTL = 600;
 
 header('Cache-Control: no-store');
 header('Referrer-Policy: no-referrer');
+header('X-Content-Type-Options: nosniff');
+header('X-Frame-Options: DENY');
+// The only page this file renders is the plain error page (one inline style
+// block, one link). Everything else is a redirect.
+header("Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
 
 /**
  * Shows a plain error page and stops. $logDetail goes to the WHMCS activity log
@@ -154,7 +159,7 @@ try {
 $objectId = strtolower($claims['oid']);
 $username = is_string($claims['preferred_username'] ?? null) ? $claims['preferred_username'] : '';
 $displayName = is_string($claims['name'] ?? null) ? $claims['name'] : '';
-// Only sanitised token text goes into log lines.
+// Only sanitised text goes into log lines.
 $who = ($username !== '' ? LogText::clean($username) : 'unknown user') . ' (oid ' . LogText::clean($objectId) . ')';
 
 if (!Roles::satisfied($claims, $settings->requiredRoles())) {
@@ -190,7 +195,7 @@ if (!$admin) {
     entra_fail('The WHMCS admin linked to this Microsoft account no longer exists.', 'linked admin ID ' . (int) $link->admin_id . ' missing for ' . $who);
 }
 if (!empty($admin->disabled)) {
-    entra_fail('This WHMCS admin account is disabled.', 'disabled admin ' . $admin->username . ' for ' . $who);
+    entra_fail('This WHMCS admin account is disabled.', 'disabled admin ' . LogText::clean($admin->username) . ' for ' . $who);
 }
 
 try {
@@ -200,6 +205,6 @@ try {
 }
 
 Links::recordLogin($link->id, $username, $displayName);
-logActivity('Entra ID Admin Login: admin ' . $admin->username . ' signed in as ' . $who);
+logActivity('Entra ID Admin Login: admin ' . LogText::clean($admin->username) . ' signed in as ' . $who);
 
 entra_redirect(entra_admin_login_admin_url());
