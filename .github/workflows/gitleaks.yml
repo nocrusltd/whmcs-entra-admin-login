@@ -1,0 +1,158 @@
+name: Secret scan (gitleaks)
+
+# ISMS-01: block new secrets from being committed.
+#
+# Scans ONLY the commits a pull request or a push to main introduces, never the
+# full history. If that commit range cannot be established the job fails.
+# Anything already in the history is not re-scanned here: a blocking
+# full-history scan would fail every run on an old finding and teach people to
+# ignore the check. History findings are handled separately.
+#
+# Uses the open-source gitleaks binary (MIT), pinned by version and SHA-256.
+# The gitleaks-action is not used: it is under a proprietary licence since
+# v2.0.0 and needs a licence key for repositories owned by an organisation.
+# Results go to the job log and job summary with secret values redacted.
+# Nothing is uploaded and no repository secret is used.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Pull requests: a newer run for the same PR replaces the older one, which is
+# safe because every PR run scans the whole base..head range.
+# Pushes: each run scans only its own before..after range, so no push run may
+# be cancelled or displaced while queued. The run id makes its group unique.
+concurrency:
+  group: gitleaks-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gitleaks:
+    name: gitleaks (new commits only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history is needed to resolve the commit range. It is fetched,
+          # not scanned: the scan below is limited to the range.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install gitleaks (checksum verified)
+        env:
+          # Bump the version and the checksum together. The checksum is the
+          # linux_x64 line of gitleaks_<version>_checksums.txt on the release.
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          curl -fsSL --retry 3 -o "$tmp/gitleaks.tar.gz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  $tmp/gitleaks.tar.gz" | sha256sum --check --strict -
+          tar -xzf "$tmp/gitleaks.tar.gz" -C "$tmp" gitleaks
+          mkdir -p "$RUNNER_TEMP/bin"
+          install -m 0755 "$tmp/gitleaks" "$RUNNER_TEMP/bin/gitleaks"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/gitleaks" version
+
+      - name: Scan the new commits
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          is_commit() { git cat-file -e "$1^{commit}" 2>/dev/null; }
+          zero=0000000000000000000000000000000000000000
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            # Commits on the PR branch that are not on the base branch.
+            is_commit "$PR_BASE_SHA" || { echo "::error::base commit $PR_BASE_SHA is not in the clone"; exit 1; }
+            is_commit "$PR_HEAD_SHA" || { echo "::error::head commit $PR_HEAD_SHA is not in the clone"; exit 1; }
+            range="${PR_BASE_SHA}..${PR_HEAD_SHA}"
+          elif [ "$PUSH_BEFORE" != "$zero" ] && is_commit "$PUSH_BEFORE"; then
+            # Commits this push added to main.
+            range="${PUSH_BEFORE}..${PUSH_AFTER}"
+          else
+            # No usable previous tip: the branch was just created, or a force
+            # push dropped it. The pushed range cannot be established, so fail
+            # closed. Scanning only the tip would pass commits unscanned, and
+            # scanning everything would hit the known history (see header).
+            echo "::error::previous tip '${PUSH_BEFORE}' is not available, so the pushed range cannot be established. Nothing was scanned. Scan the rewritten commits by hand: gitleaks git . --log-opts=\"--diff-merges=remerge --text <old-tip>..${PUSH_AFTER}\""
+            exit 1
+          fi
+
+          # --diff-merges=remerge makes git show, for a merge commit, what the
+          # committed merge changed on top of the automatic merge: conflict
+          # resolutions and anything else added in the merge itself. Without
+          # it git prints no patch for merges and gitleaks would not see them.
+          # Changes the merged-in branch brought are not repeated.
+          # --text makes git print a patch for every file. Without it a file
+          # that .gitattributes marks as binary or "-diff" is shown only as
+          # "Binary files differ" and its contents would not be scanned.
+          log_opts="--diff-merges=remerge --text ${range}"
+
+          # remerge only covers two-parent merges: git prints no patch for a
+          # merge with three or more parents (octopus), so one in the range
+          # would go unscanned. Fail rather than pass it.
+          octopus="$(git rev-list --min-parents=3 "$range")"
+          if [ -n "$octopus" ]; then
+            echo "::error::the range contains a merge with more than two parents, which cannot be scanned: ${octopus//$'\n'/ }. Redo it as two-parent merges."
+            exit 1
+          fi
+
+          # gitleaks exits 0 with "no leaks found" when its git log call fails
+          # (bad revision, unsupported option). Run the same git log first so
+          # that case fails the job here instead of passing as a clean scan.
+          # shellcheck disable=SC2086 # log_opts is split into words on purpose
+          git log -p -U0 $log_opts > /dev/null
+          count="$(git rev-list --count "$range")"
+          echo "Scanning ${count} commit(s): git log ${log_opts}"
+
+          report="$RUNNER_TEMP/gitleaks-report.json"
+          rc=0
+          # --redact keeps secret values out of the log and the report.
+          # Exit code 2 means findings; any other non-zero is a tool error.
+          gitleaks git . \
+            --log-opts="$log_opts" \
+            --redact \
+            --no-banner \
+            --exit-code 2 \
+            --report-format json \
+            --report-path "$report" || rc=$?
+
+          {
+            echo "## gitleaks"
+            echo
+            echo "Range: \`git log ${log_opts}\` (${count} commit(s))"
+            echo
+            if [ "$rc" -eq 0 ]; then
+              echo "No secrets found in the new commits."
+            elif [ "$rc" -eq 2 ]; then
+              echo "**$(jq length "$report") finding(s).** Secret values are redacted."
+              echo
+              echo "| Rule | File | Line | Commit |"
+              echo "| --- | --- | --- | --- |"
+              jq -r '.[] | "| \(.RuleID) | `\(.File)` | \(.StartLine) | \(.Commit[0:12]) |"' "$report"
+              echo
+              echo "Remove the secret from the branch history (amend or rebase, not a follow-up commit) and rotate it. Only allowlist a proven false positive, in \`.gitleaks.toml\`."
+            else
+              echo "gitleaks failed to run (exit code ${rc}). See the job log."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$rc" -eq 2 ]; then
+            echo "::error::gitleaks found secrets in the new commits (values redacted). See the job summary."
+          elif [ "$rc" -ne 0 ]; then
+            echo "::error::gitleaks failed to run (exit code ${rc})"
+          fi
+          exit "$rc"
