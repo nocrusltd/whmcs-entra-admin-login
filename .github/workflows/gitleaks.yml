@@ -157,11 +157,16 @@ jobs:
           report="$RUNNER_TEMP/gitleaks-report.json"
           rc=0
           # --redact keeps secret values out of the log and the report.
+          # --ignore-gitleaks-allow: a "gitleaks:allow" comment on the line
+          # does not suppress a finding. The only exception route is a
+          # fingerprint in .gitleaksignore, which is one file a reviewer can
+          # read in the pull request.
           # Exit code 2 means findings; any other non-zero is a tool error.
           gitleaks git . \
             --config "$RUNNER_TEMP/gitleaks.toml" \
             --log-opts="$log_opts" \
             --redact \
+            --ignore-gitleaks-allow \
             --no-banner \
             --exit-code 2 \
             --report-format json \
